@@ -1,0 +1,13 @@
+# Ignore the massive MPIIGaze dataset and archives
+dataset/
+*.tar.gz
+
+# Ignore PyTorch model weight files (these get huge)
+*.pth
+
+# Ignore Python cache files (clutter)
+__pycache__/
+*.pyc
+
+# Ignore local environment files
+.env
