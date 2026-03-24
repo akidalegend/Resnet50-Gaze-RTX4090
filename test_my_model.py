@@ -9,6 +9,7 @@ from torchvision import transforms
 from PIL import Image
 from collections import deque
 import warnings
+from datetime import datetime
 
 warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf")
 
@@ -32,6 +33,11 @@ transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
+
+# Setup logging
+log_data = []
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+log_filename = f"gaze_log_{timestamp}.json"
 
 mp_face_detection = mp.solutions.face_detection
 face_detection = mp_face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.7)
@@ -92,38 +98,34 @@ while True:
                 input_tensor = transform(Image.fromarray(face_crop)).unsqueeze(0).to(device)
                 with torch.no_grad():
                     output = model(input_tensor)
-                    pred_pitch = output[0][0].item() * 1000.0
-                    pred_yaw = output[0][1].item() * 1000.0
-                    print(f"Looking at Camera -> Yaw: {pred_yaw:.1f} | Pitch: {pred_pitch:.1f}")
+                    # REMOVE the * 1000.0 multiplier for now
+                    pred_pitch = output[0][0].item() 
+                    pred_yaw = output[0][1].item()
+                    
+                # 1. RAW DATA CHECK: Print these to your console
+                print(f"RAW -> Pitch: {pred_pitch:.4f} | Yaw: {pred_yaw:.4f}")
 
-                # --- 1. APPLY JSON CALIBRATION ---
-                raw_target_x = (pred_yaw * calib['sens_x']) + calib['off_x']
-                raw_target_y = (pred_pitch * calib['sens_y']) + calib['off_y']
-                
-                # --- 2. DYNAMIC ANCHOR TRACKING (Moving Head Fix) ---
-                # How far did you move from your calibrated sitting position?
-                head_shift_x = face_center_x - calib['anchor_x']
-                head_shift_y = face_center_y - calib['anchor_y']
-                
-                # Compensate for the physical head movement!
-                target_x = int(raw_target_x - head_shift_x)
-                target_y = int(raw_target_y - head_shift_y)
-                
-                # Apply Smoothing
-                history_x.append(target_x)
-                history_y.append(target_y)
-                smooth_x = int(sum(history_x) / len(history_x))
-                smooth_y = int(sum(history_y) / len(history_y))
-                
-                smooth_x = max(0, min(w, smooth_x))
-                smooth_y = max(0, min(h, smooth_y))
-                
-                cv2.circle(frame, (smooth_x, smooth_y), 20, (0, 0, 255), -1) 
-                cv2.circle(frame, (smooth_x, smooth_y), 5, (255, 255, 255), -1)
-                cv2.line(frame, (face_center_x, face_center_y), (smooth_x, smooth_y), (0, 255, 0), 2)
+                # --- 1D HORIZONTAL PIVOT ---
+                # Use the raw yaw for horizontal tracking
+                target_x = int((pred_yaw * calib['sens_x']) + calib['off_x'])
+
+                # LOCK Y to the vertical center of your screen (e.g., 540 for a 1080p monitor)
+                target_y = 540 
+
+                # Constrain X to stay within screen bounds
+                target_x = max(0, min(w, target_x))
+
+                # Draw the 1D Gaze Dot
+                cv2.circle(frame, (target_x, target_y), 20, (0, 255, 0), -1) # Green for 1D mode
 
     cv2.imshow(window_name, frame)
     if cv2.waitKey(1) & 0xFF == ord('q'): break
 
 cap.release()
 cv2.destroyAllWindows()
+
+# Save log file
+if log_data:
+    with open(log_filename, "w") as f:
+        json.dump(log_data, f, indent=2)
+    print(f"\n✅ Logged {len(log_data)} frames to {log_filename}")
