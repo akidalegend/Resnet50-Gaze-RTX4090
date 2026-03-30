@@ -1,0 +1,17 @@
+{
+  "timestamp": "20260330_234111",
+  "screen_resolution": {
+    "width": 3840,
+    "height": 2160
+  },
+  "fixation_target": {
+    "x": 1920,
+    "y": 1080
+  },
+  "analysis": {
+    "num_frames": 300,
+    "horizontal": {
+      "mean": 3383.7466666666664,
+      "std_sigma": 1191.223019626841,
+      "snr": 3.223577732071453,
+      "stable": 
