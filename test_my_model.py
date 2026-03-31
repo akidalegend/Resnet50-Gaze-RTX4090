@@ -106,8 +106,8 @@ def analyze_fixation_data(log_data):
     snr_y = calculate_snr(SCREEN_HEIGHT, sigma_y)
 
     # Stability flags based on Rose Criterion
-    x_stable = snr_x >= ROSE_SNR_THRESHOLD
-    y_stable = snr_y >= ROSE_SNR_THRESHOLD
+    x_stable = bool(snr_x >= ROSE_SNR_THRESHOLD)
+    y_stable = bool(snr_y >= ROSE_SNR_THRESHOLD)
 
     # Frame-to-frame jitter
     jitter_x = np.mean(np.abs(np.diff(mapped_x)))
@@ -255,7 +255,9 @@ cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREE
 cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1)
 
 # 6. Smoothing Queues
-history_x = deque(maxlen=7)
+# Initialize session-specific bias (replaces hardcoded BIAS_X)
+session_bias_x = 0 
+history_x = deque(maxlen=5) # Ensure history exists for smoothing
 history_y = deque(maxlen=7)
 bbox_history_x = deque(maxlen=5)
 bbox_history_y = deque(maxlen=5)
@@ -343,15 +345,19 @@ while True:
                     raw_pitch = output[0][0].item() * 1000.0
                     raw_yaw = output[0][1].item() * 1000.0
 
-                # --- 1D HORIZONTAL PIVOT ---
-                # Map yaw to 4K screen coordinates
-                target_x = int((raw_yaw * calib['sens_x']) + calib['off_x'])
+                # --- 1D HORIZONTAL PIVOT WITH AUTO-ZEROING ---
+                # 1. Map raw yaw to 4K screen coordinates
+                raw_target_x = (raw_yaw * calib['sens_x']) + calib['off_x']
+                
+                # 2. Apply the Dynamic Session Bias (calculated when 'Z' is pressed)
+                corrected_x = raw_target_x + session_bias_x
+                
+                # 3. Apply Temporal Smoothing (Moving Average)
+                history_x.append(corrected_x)
+                target_x = int(sum(history_x) / len(history_x))
 
-                # HARD LOCK Y - Vertical dimensionality reduction
-                # Bypasses vertical blindness (SNR < 1:1)
+                # 4. Final Lock and Constrain
                 target_y = Y_LOCK_POSITION
-
-                # Constrain X to 4K screen bounds
                 target_x = max(0, min(SCREEN_WIDTH, target_x))
 
                 # Calculate mapped_y for logging (even though we don't use it)
@@ -499,6 +505,15 @@ while True:
     frame_count += 1
 
     key = cv2.waitKey(1) & 0xFF
+    
+    # --- AUTO-ZEROING COMMAND ---
+    # When 'Z' is pressed, calculate the difference between current gaze and center
+    if key == ord('z'):
+        # 1920 is the center of your 4K screen
+        # We use the raw_target_x (unsmoothed) to get an instant anchor
+        session_bias_x = 1920 - raw_target_x 
+        print(f"System Zeroed! New Session Bias: {session_bias_x:.2f} px")
+    
     if key == ord('q'):
         break
     elif key == ord('f') and current_mode == MODE_LIVE:
