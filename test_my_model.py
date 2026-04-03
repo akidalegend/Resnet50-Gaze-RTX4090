@@ -257,7 +257,8 @@ cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1)
 # 6. Smoothing Queues
 # Initialize session-specific bias (replaces hardcoded BIAS_X)
 session_bias_x = 0 
-history_x = deque(maxlen=5) # Ensure history exists for smoothing
+history_x = deque(maxlen=10) # Increased to 10 frames for better stability
+show_comparison = True       # Toggle this to show/hide the flickering dot
 history_y = deque(maxlen=7)
 bbox_history_x = deque(maxlen=5)
 bbox_history_y = deque(maxlen=5)
@@ -343,26 +344,45 @@ while True:
                     output = model(input_tensor)
                     # Must match calibration.py scaling (* 1000.0)
                     raw_pitch = output[0][0].item() * 1000.0
-                    raw_yaw = output[0][1].item() * 1000.0
+                    pred_yaw = output[0][1].item() * 1000.0
+                    raw_yaw = pred_yaw  # Keep raw_yaw for backwards compatibility
 
-                # --- 1D HORIZONTAL PIVOT WITH AUTO-ZEROING ---
-                # 1. Map raw yaw to 4K screen coordinates
-                raw_target_x = (raw_yaw * calib['sens_x']) + calib['off_x']
+                # 1. CALCULATE RAW COORDINATE (The "Flickering" Signal)
+                # We apply the sensitivity and offset from calibration.json
+                raw_x_unbiased = (pred_yaw * calib['sens_x']) + calib['off_x']
                 
-                # 2. Apply the Dynamic Session Bias (calculated when 'Z' is pressed)
-                corrected_x = raw_target_x + session_bias_x
+                # 2. APPLY AUTO-ZEROING BIAS
+                # 'session_bias_x' is updated when you press 'Z'
+                raw_x_corrected = raw_x_unbiased + session_bias_x
                 
-                # 3. Apply Temporal Smoothing (Moving Average)
-                history_x.append(corrected_x)
-                target_x = int(sum(history_x) / len(history_x))
+                # 3. APPLY TEMPORAL SMOOTHING (Moving Average)
+                history_x.append(raw_x_corrected)
+                smoothed_x = sum(history_x) / len(history_x)
 
-                # 4. Final Lock and Constrain
+                # 4. LOCK THE Y-AXIS (1D Pivot)
                 target_y = Y_LOCK_POSITION
+                target_x = int(smoothed_x)
                 target_x = max(0, min(SCREEN_WIDTH, target_x))
 
                 # Calculate mapped_y for logging (even though we don't use it)
                 mapped_y_raw = int((raw_pitch * calib['sens_y']) + calib['off_y'])
                 mapped_y_raw = max(0, min(SCREEN_HEIGHT, mapped_y_raw))
+                
+                # --- VISUAL FEEDBACK & COMPARISON ---
+                # Draw the "Flickering" Dot (Small, Red, Unstable)
+                # Use this for your dissertation video to show the 'Raw' noise
+                if show_comparison:
+                    cv2.circle(frame, (int(raw_x_corrected / scale_x), int(target_y / scale_y)), 
+                               10, (0, 0, 255), 2) 
+                    cv2.putText(frame, "RAW (Flicker)", (int(raw_x_corrected / scale_x), int(target_y / scale_y) - 20),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
+                # Draw the "Smoothed" Dot (Large, Green, Stable)
+                # This is your 'Final' validated system
+                cv2.circle(frame, (int(smoothed_x / scale_x), int(target_y / scale_y)), 
+                           25, (0, 255, 0), -1)
+                cv2.putText(frame, "SMOOTHED (1D Pivot)", (int(smoothed_x / scale_x) + 30, int(target_y / scale_y)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
     # Convert 4K coordinates to webcam display coordinates for visualization
     display_x = int(target_x / scale_x)
@@ -506,13 +526,15 @@ while True:
 
     key = cv2.waitKey(1) & 0xFF
     
-    # --- AUTO-ZEROING COMMAND ---
-    # When 'Z' is pressed, calculate the difference between current gaze and center
+    # --- KEY COMMANDS ---
     if key == ord('z'):
-        # 1920 is the center of your 4K screen
-        # We use the raw_target_x (unsmoothed) to get an instant anchor
-        session_bias_x = 1920 - raw_target_x 
-        print(f"System Zeroed! New Session Bias: {session_bias_x:.2f} px")
+        # Calculate bias to center the raw signal instantly
+        session_bias_x = 1920 - raw_x_unbiased
+        print(f"Zeroed! Bias: {session_bias_x:.2f}")
+
+    if key == ord('c'):
+        show_comparison = not show_comparison # Toggle flickering dot on/off
+        print(f"Comparison view: {'ON' if show_comparison else 'OFF'}")
     
     if key == ord('q'):
         break
