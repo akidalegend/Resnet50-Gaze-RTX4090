@@ -140,8 +140,8 @@ while True:
             screen_diff_x = (SCREEN_WIDTH - margin_x_4k) - margin_x_4k
             screen_diff_y = (SCREEN_HEIGHT - margin_y_4k) - margin_y_4k
 
-            calibration_data['sens_x'] = screen_diff_x / diff_x * 0.1  # 0.1 is a tuning factor to prevent overshooting (over sensitivity)
-            calibration_data['sens_y'] = screen_diff_y / diff_y * 0.1 # 0.1 is a tuning factor to prevent overshooting (over sensitivity)
+            calibration_data['sens_x'] = screen_diff_x / diff_x * 0.5  # 0.5 is a tuning factor to prevent overshooting (over sensitivity)
+            calibration_data['sens_y'] = screen_diff_y / diff_y * 0.5 # 0.5 is a tuning factor to prevent overshooting (over sensitivity)
             calibration_data['off_x'] = margin_x_4k - (pred_tl_x * calibration_data['sens_x'])
             calibration_data['off_y'] = margin_y_4k - (pred_tl_y * calibration_data['sens_y'])
 

@@ -11,3 +11,8 @@ __pycache__/
 
 # Ignore local environment files
 .env
+
+# Ignore JSON log and calibration files
+gaze_log_*.json
+calibration_*.json
+snr_analysis_*.json

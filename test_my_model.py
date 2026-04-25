@@ -8,6 +8,7 @@ from timm import create_model
 from torchvision import transforms
 from PIL import Image
 from collections import deque
+from statistics import median
 import warnings
 from datetime import datetime
 import time
@@ -243,22 +244,37 @@ log_filename = f"gaze_log_{timestamp}.json"
 mp_face_detection = mp.solutions.face_detection
 face_detection = mp_face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.7)
 
-# 5. Setup Camera (1080p)
+# 5. Setup Camera (1080p) - OPTIMIZED
 cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, WEBCAM_WIDTH)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, WEBCAM_HEIGHT)
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer to 1 frame for lower latency
 window_name = "ADHD Gaze Tracker - 4K 1D Pivot Mode"
 cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+# Set window properties BEFORE showing first frame
+cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1)
+cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+# Warm up the camera with a few dropped frames
+for _ in range(3):
+    cap.read()
+# Now show the display
 ret, dummy_frame = cap.read()
 if ret: cv2.imshow(window_name, dummy_frame)
-cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1)
 
-# 6. Smoothing Queues
+# 6. Smoothing & Initialization
 # Initialize session-specific bias (replaces hardcoded BIAS_X)
-session_bias_x = 0 
-history_x = deque(maxlen=10) # Increased to 10 frames for better stability
+session_bias_x = 0
+# Median Filter Configuration (removes outliers before EMA)
+x_buffer = []  # Small window to keep lag manageable
+# EMA Smoothing Configuration
+ema_x = 1920  # Start at center
+# Start with a very low Alpha for maximum stability
+# 0.05 means 95% of the position comes from the past, 5% from the new frame
+alpha = 0.05
 show_comparison = True       # Toggle this to show/hide the flickering dot
+# Deadzone Configuration (prevents jitter when eyes are still)
+last_stable_x = 1920
+deadzone_threshold = 50  # Pixels. Increase this if it still jitters.
 history_y = deque(maxlen=7)
 bbox_history_x = deque(maxlen=5)
 bbox_history_y = deque(maxlen=5)
@@ -355,13 +371,32 @@ while True:
                 # 'session_bias_x' is updated when you press 'Z'
                 raw_x_corrected = raw_x_unbiased + session_bias_x
                 
-                # 3. APPLY TEMPORAL SMOOTHING (Moving Average)
-                history_x.append(raw_x_corrected)
-                smoothed_x = sum(history_x) / len(history_x)
+                # 3. APPLY MEDIAN FILTERING (removes outliers)
+                # Add the new raw_x to a small buffer
+                x_buffer.append(raw_x_corrected)
+                if len(x_buffer) > 5:  # Small window to keep lag manageable
+                    x_buffer.pop(0)
+                # Take the Median of the buffer to kill outliers
+                median_x = median(x_buffer)
+                
+                # 4. APPLY EMA SMOOTHING
+                # New Gaze = (Alpha * Median) + ((1 - Alpha) * Previous)
+                # 0.05 alpha = 95% past position, 5% new frame for max stability
+                ema_x = (alpha * median_x) + ((1 - alpha) * ema_x)
 
-                # 4. LOCK THE Y-AXIS (1D Pivot)
+                # 5. APPLY DEADZONE LOGIC (prevent jitter when eyes are still)
+                movement_velocity = abs(ema_x - last_stable_x)
+                if movement_velocity > deadzone_threshold:
+                    # Only update the position if the eyes moved significantly
+                    final_display_x = ema_x
+                    last_stable_x = ema_x
+                else:
+                    # Keep the dot where it was to prevent jitter
+                    final_display_x = last_stable_x
+
+                # 6. LOCK THE Y-AXIS (1D Pivot)
                 target_y = Y_LOCK_POSITION
-                target_x = int(smoothed_x)
+                target_x = int(final_display_x)
                 target_x = max(0, min(SCREEN_WIDTH, target_x))
 
                 # Calculate mapped_y for logging (even though we don't use it)
@@ -377,11 +412,11 @@ while True:
                     cv2.putText(frame, "RAW (Flicker)", (int(raw_x_corrected / scale_x), int(target_y / scale_y) - 20),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
-                # Draw the "Smoothed" Dot (Large, Green, Stable)
-                # This is your 'Final' validated system
-                cv2.circle(frame, (int(smoothed_x / scale_x), int(target_y / scale_y)), 
+                # Draw the "Smoothed + Deadzone" Dot (Large, Green, Stable)
+                # This is your 'Final' validated system with jitter prevention
+                cv2.circle(frame, (int(final_display_x / scale_x), int(target_y / scale_y)), 
                            25, (0, 255, 0), -1)
-                cv2.putText(frame, "SMOOTHED (1D Pivot)", (int(smoothed_x / scale_x) + 30, int(target_y / scale_y)),
+                cv2.putText(frame, "SMOOTHED + DEADZONE (1D Pivot)", (int(final_display_x / scale_x) + 30, int(target_y / scale_y)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
     # Convert 4K coordinates to webcam display coordinates for visualization
